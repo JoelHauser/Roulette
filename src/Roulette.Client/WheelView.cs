@@ -12,27 +12,34 @@ namespace Roulette.Client
     ///
     /// ## Drawn, not photographed
     ///
-    /// This was a photograph with a generated pocket ring painted over it, and it was
-    /// wrong twice. The photograph had 33 or 34 pockets rather than 37, so the ball
-    /// could never have landed on the number that won; and the overlay was drawn with
-    /// its radii measured against the image's **diameter** where they meant its
-    /// radius, so the ring came out at twice the size and burst out of the bowl as a
-    /// starburst.
+    /// This began as a photograph with a pocket ring painted over it and was wrong
+    /// twice: the photograph had 33 or 34 pockets against the 37 the server settles on,
+    /// and the overlay's radii were measured against the image's diameter where they
+    /// meant its radius, so the ring came out at double size and burst out of the bowl.
     ///
-    /// Everything is drawn now. That fixes both at once -- 37 pockets because the
-    /// server sent 37, at the radius asked for -- and it costs nothing in looks: a
-    /// wheel is concentric rings, which is exactly what a texture generator is good at.
+    /// Everything is drawn now, from the pocket list the server sends. There are 37
+    /// pockets because there are 37 pockets, and they are where they are asked to be.
     ///
     /// ## The bowl is still, the head turns
     ///
-    /// A real wheel is two pieces. The **bowl** -- the outer rim and the track the ball
-    /// runs on -- is furniture and never moves. The **head** -- the pockets, the
-    /// numbers, the cone -- spins inside it. Drawing them as one picture, as this did,
-    /// meant the ball's track rotated under the ball, which is why the counter-rotation
-    /// never read.
+    /// A real wheel is two pieces. The **bowl** -- the outer rim, the wooden apron and
+    /// the track the ball runs on -- never moves. The **head** -- the pockets, the
+    /// numbers, the green ring and the cone -- spins inside it. Drawing them as one
+    /// picture rotated the track under the ball, so no amount of counter-rotation could
+    /// ever have read.
     ///
-    /// So they are two images now. The ball orbits the still bowl one way while the
-    /// head turns the other beneath it, then drops in.
+    /// ## Why the ball looked like it was hitching
+    ///
+    /// Not the maths. The ball travelled **41 pixels between frames while being 31
+    /// pixels wide**, so two consecutive frames never overlapped and the eye saw a row
+    /// of separate balls rather than one moving one. Anything that moves more than its
+    /// own width per frame strobes, however smooth the function driving it.
+    ///
+    /// Two rounds of chasing that as a discontinuity found nothing, because there was
+    /// nothing to find: a simulation of the exact formulas showed zero direction
+    /// reversals. What it did show was the step size. The ball is slower and larger
+    /// now, and every constant below is chosen against that ratio -- see
+    /// <see cref="StepPerFrame"/>.
     ///
     /// ## Landing is computed, never hoped for
     ///
@@ -40,64 +47,75 @@ namespace Roulette.Client
     ///
     ///     ballAngle = headAngle + pocketAngle(position) + relative
     ///
-    /// where `relative` starts at a dozen turns and decays to exactly zero. Early on
-    /// its decay outruns the head, so the ball visibly runs the other way; at the end
-    /// it is zero, so the ball sits in its pocket and rides round -- with no special
-    /// case to put it there and nothing to round off.
-    ///
-    /// The decay is the physics. Angular velocity under friction falls off
-    /// exponentially, so the relative angle is an exponential settling on its target,
-    /// and the bounces are a damped oscillation on top. Both reach zero at the same
-    /// instant the spin ends, so however lively it looks it cannot change where the
-    /// ball finishes.
+    /// where `relative` decays to exactly zero. Early on its decay outruns the head, so
+    /// the ball visibly runs the other way; at the end it is zero, so the ball sits in
+    /// its pocket and rides round, with no special case to put it there. The decay is
+    /// exponential because angular velocity under friction is.
     /// </summary>
     internal static class WheelView
     {
-        // ---- geometry, all as fractions of the wheel's RADIUS ---------------------
+        // ---- geometry, as fractions of the wheel's RADIUS, read from outside in -----
         //
-        // Read down from the outside. The bowl owns everything above ApronInner, the
-        // head everything below it.
+        // Laid out to match a real wheel: gold rim, wooden apron carrying the
+        // deflectors, the pocket ring with the numbers inside the pockets, a gold
+        // separator, the green inner ring, and the cone with its spider.
 
-        private const float RimInner = 0.90f;
-        private const float TrackInner = 0.795f;
-        private const float ApronInner = 0.735f;
+        private const float RimInner = 0.955f;
+        private const float ApronInner = 0.865f;
+        private const float OuterGoldInner = 0.845f;
+        private const float PocketInner = 0.640f;
+        private const float MidGoldInner = 0.615f;
+        private const float GreenInner = 0.470f;
+        private const float ConeOuter = 0.445f;
 
-        private const float PocketInner = 0.50f;
-        private const float NumberRadius = 0.605f;
-        private const float HubRing = 0.46f;
+        /// <summary>Where the numbers sit: the middle of a pocket block.</summary>
+        private const float NumberRadius = 0.738f;
 
-        /// <summary>Where the ball runs before it drops: the middle of the track.</summary>
-        private const float TrackRadius = 0.845f;
+        /// <summary>Where the ball runs before it drops: the wooden track.</summary>
+        private const float TrackRadius = 0.905f;
 
-        /// <summary>Where it comes to rest: the outer part of a pocket.</summary>
-        private const float RestRadius = 0.645f;
+        /// <summary>Where it comes to rest: the outer end of a pocket, clear of the number.</summary>
+        private const float RestRadius = 0.800f;
 
         /// <summary>
-        /// Ball diameter over wheel diameter. A pocket is about 0.055 of the diameter
-        /// wide at the resting radius, and a ball that fills three quarters of one sits
-        /// in a pocket rather than bridging two.
+        /// Ball diameter over wheel diameter. A pocket is about 0.068 of the diameter
+        /// across at the resting radius, so this fills roughly seven tenths of one --
+        /// it sits in a pocket rather than bridging two, and it is large enough that
+        /// its own width outruns how far it moves in a frame.
         /// </summary>
-        private const float BallSize = 0.040f;
+        private const float BallSize = 0.048f;
+
+        // ---- motion -----------------------------------------------------------------
+
+        private const float Duration = 8.0f;
+
+        /// <summary>Where the ball leaves the track and starts falling in.</summary>
+        private const float Drop = 0.62f;
+
+        /// <summary>Friction. Angular velocity decays as e^-kt, so the journey left does too.</summary>
+        private const float Decay = 3.2f;
+
+        /// <summary>At least this much travel relative to the head, in degrees.</summary>
+        private const float MinRelative = 360f * 5f;
+
+        private const float HeadTurns = 2.0f;
 
         private const int Texture = 1024;
 
-        // ---- palette ---------------------------------------------------------------
+        // ---- palette ----------------------------------------------------------------
 
-        private static readonly Color32 RimDark = new Color32(28, 22, 17, 255);
-        private static readonly Color32 RimLight = new Color32(63, 51, 38, 255);
-        private static readonly Color32 TrackDark = new Color32(38, 31, 24, 255);
-        private static readonly Color32 TrackLight = new Color32(74, 61, 45, 255);
-        private static readonly Color32 Apron = new Color32(46, 38, 29, 255);
-        private static readonly Color32 Gold = new Color32(184, 154, 92, 255);
-        private static readonly Color32 GoldDim = new Color32(120, 99, 58, 255);
-        private static readonly Color32 Red = new Color32(140, 27, 27, 255);
-        private static readonly Color32 Black = new Color32(26, 25, 27, 255);
-        private static readonly Color32 Green = new Color32(20, 96, 58, 255);
-        private static readonly Color32 ConeLight = new Color32(112, 93, 62, 255);
-        private static readonly Color32 ConeDark = new Color32(40, 33, 23, 255);
+        private static readonly Color32 GoldBright = new Color32(226, 194, 118, 255);
+        private static readonly Color32 Gold = new Color32(190, 154, 74, 255);
+        private static readonly Color32 GoldDeep = new Color32(140, 111, 48, 255);
+        private static readonly Color32 Wood = new Color32(101, 68, 42, 255);
+        private static readonly Color32 WoodDark = new Color32(66, 43, 26, 255);
+        private static readonly Color32 Red = new Color32(178, 30, 38, 255);
+        private static readonly Color32 Black = new Color32(24, 23, 25, 255);
+        private static readonly Color32 Green = new Color32(30, 150, 68, 255);
+        private static readonly Color32 GreenRing = new Color32(38, 150, 78, 255);
         private static readonly Color32 Clear = new Color32(0, 0, 0, 0);
 
-        private static readonly Color Ink = new Color(0.95f, 0.93f, 0.87f, 1f);
+        private static readonly Color Numerals = new Color(0.95f, 0.87f, 0.66f, 1f);
 
         private static RectTransform _head;
         private static RectTransform _ballPivot;
@@ -108,9 +126,28 @@ namespace Roulette.Client
         private static int _pocketCount = 37;
         private static float _headAngle;
 
+        /// <summary>Where the ball is now, so a new spin launches from it rather than jumping.</summary>
+        private static float _ballAngle;
+
         private static Coroutine _spinning;
 
         internal static bool IsSpinning => _spinning != null;
+
+        /// <summary>
+        /// How far the ball moves between frames at its quickest, as a multiple of its
+        /// own width. **Over 1 and it strobes**, which is the whole reason the motion
+        /// constants are what they are. Logged once so a future change to any of them
+        /// gets told immediately rather than being reported as a stutter weeks later.
+        /// </summary>
+        private static float StepPerFrame(float diameter)
+        {
+            var launch = MinRelative * Decay / (1f - Mathf.Exp(-Decay)) / Duration;
+            var head = 360f * HeadTurns * 2.4f / Duration;
+            var degreesPerFrame = Mathf.Abs(head - launch) / 120f;
+            var arc = degreesPerFrame * Mathf.Deg2Rad * TrackRadius * diameter * 0.5f;
+
+            return arc / (BallSize * diameter);
+        }
 
         internal static GameObject Build(
             Transform parent, IReadOnlyList<PocketInfo> pockets, float diameter, TMP_FontAsset font)
@@ -119,13 +156,13 @@ namespace Roulette.Client
             _diameter = diameter;
             _pocketCount = Mathf.Max(1, pockets.Count);
             _headAngle = 0f;
+            _ballAngle = 0f;
 
             var root = NewImage("Wheel", parent, Clear);
             root.sizeDelta = new Vector2(diameter, diameter);
 
-            // The head goes down first so the bowl's inner lip draws over its edge,
-            // which is what makes the pockets look sunk into the bowl rather than
-            // pasted on top of it.
+            // The head goes down first so the bowl's inner edge draws over it, which is
+            // what makes the pockets look sunk into the bowl rather than pasted on.
             _head = NewImage("Head", root, Color.white);
             _head.anchorMin = _head.anchorMax = new Vector2(0.5f, 0.5f);
             _head.pivot = new Vector2(0.5f, 0.5f);
@@ -143,14 +180,19 @@ namespace Roulette.Client
             BuildBall(root, diameter);
             BuildMarker(root, diameter);
 
-            Apply(_headAngle, _headAngle, TrackRadius);
+            Apply(0f, 0f, TrackRadius);
+
+            var step = StepPerFrame(diameter);
+            RouletteClientPlugin.Log.LogInfo(
+                $"[Roulette] wheel built, {pockets.Count} pockets. Ball moves {step:0.00}x its own "
+                + $"width per frame at launch ({(step > 1f ? "OVER 1 -- it will strobe" : "under 1, smooth")}).");
 
             return root.gameObject;
         }
 
         /// <summary>
-        /// Spins to a pocket and lands on it. <paramref name="position"/> is the
-        /// winning pocket's place on the wheel, clockwise from the single zero.
+        /// Spins to a pocket and lands on it. <paramref name="position"/> is the winning
+        /// pocket's place on the wheel, clockwise from the single zero.
         /// </summary>
         internal static void Spin(int position, Action onFinished)
         {
@@ -172,41 +214,28 @@ namespace Roulette.Client
 
         private static IEnumerator Run(int position, Action onFinished)
         {
-            const float duration = 7.5f;
-
-            // Where the ball leaves the track and starts falling in.
-            const float drop = 0.62f;
-
             var headFrom = _headAngle;
-
-            // About 0.8 turns a second at its quickest, which is roughly what a croupier
-            // gives a real head. It was three times that and looked like a fairground
-            // ride.
-            var headTo = headFrom + (360f * 2.5f);
-
-            // How far the ball travels relative to the head. Positive, which is what
-            // makes it run against the head's direction: the head turns one way at a
-            // steady ease while this unwinds the other way faster.
-            //
-            // **Sized so the ball peaks near three turns a second.** At thirteen turns
-            // it launched at seven a second, which at 120fps is twenty-two degrees a
-            // frame -- the ball jumped a tenth of the way round the track between
-            // frames and strobed rather than moved. A real ball leaves the hand at
-            // about three.
-            const float relative = 360f * 6.5f;
-
+            var headTo = headFrom + (360f * HeadTurns);
             var landAt = PocketAngle(position);
+
+            // Launch from wherever the ball is sitting rather than from wherever the
+            // arithmetic happens to start, so the first frame of a spin is a ball
+            // setting off rather than a ball teleporting. Whole turns are added until
+            // it is far enough to be a spin.
+            var need = _ballAngle - headFrom - landAt;
+            var relative = need + (360f * Mathf.Ceil((MinRelative - need) / 360f));
+
             var elapsed = 0f;
 
-            while (elapsed < duration)
+            while (elapsed < Duration)
             {
                 elapsed += Time.unscaledDeltaTime;
-                var t = Mathf.Clamp01(elapsed / duration);
+                var t = Mathf.Clamp01(elapsed / Duration);
 
                 var head = Mathf.Lerp(headFrom, headTo, EaseOut(t, 2.4f));
-                var ball = head + landAt + (relative * Friction(t)) + Rattle(t, drop);
+                var ball = head + landAt + (relative * Friction(t)) + Rattle(t);
 
-                Apply(head, ball, Radius(t, drop));
+                Apply(head, ball, Radius(t));
 
                 yield return null;
             }
@@ -224,85 +253,61 @@ namespace Roulette.Client
         /// A ball on a track loses speed to friction, so its angular velocity decays
         /// exponentially and the distance still to travel decays with it. Shifted and
         /// scaled so it is precisely 0 at the end -- an exponential never actually
-        /// arrives, and "nearly there" is a ball resting a fraction off its pocket.
+        /// arrives, and "nearly there" is a ball resting a fraction out of its pocket.
         /// </summary>
         private static float Friction(float t)
         {
-            const float k = 3.6f;
-
-            var e = Mathf.Exp(-k * t);
-            var end = Mathf.Exp(-k);
+            var e = Mathf.Exp(-Decay * t);
+            var end = Mathf.Exp(-Decay);
 
             return (e - end) / (1f - end);
         }
 
         /// <summary>
-        /// Fades a bounce in over the first slice of the drop, with no step in value
-        /// **or in speed** at either end.
-        ///
-        /// This is what the hitch was. Both the rattle and the radial bounce began the
-        /// instant the ball left the track, and both started with a real slope: a sine
-        /// term climbing at four hundred degrees a second, and a bounce pushing the ball
-        /// outward the moment it was told to fall. The ball's velocity jumped in one
-        /// frame, twice, and the eye reads that as a stutter rather than as a bounce.
-        ///
-        /// Smoothstep has zero slope at both ends, so multiplying by it lets the
-        /// bouncing arrive rather than switch on.
+        /// Fades a bounce in with no step in value **or in speed** at either end.
+        /// Smoothstep is flat at both ends, so the bouncing arrives rather than
+        /// switching on mid-flight.
         /// </summary>
         private static float RampIn(float u) => Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(u / 0.18f));
 
         /// <summary>
-        /// The bouncing, which is decoration with one hard rule: exactly zero at the
-        /// end.
+        /// The ball nudging across the frets as it settles. Deliberately small: at nine
+        /// degrees it was cutting the ball's speed to a third at every beat, which reads
+        /// as surging rather than as rattling. Three degrees is a third of a pocket.
         ///
-        /// Nothing while the ball is still on the track -- it is smooth up there. Once
-        /// it drops it crosses the frets, and two frequencies stand in for that: a slow
-        /// one for skipping across pockets and a fast one for rattling inside the one
-        /// it settles in. The envelope is driven to nothing by the same clock that ends
-        /// the spin, so a lively bounce cannot move where the ball finishes.
+        /// Zero at the end, like everything else here, so however lively it looks it
+        /// cannot move where the ball finishes.
         /// </summary>
-        private static float Rattle(float t, float drop)
+        private static float Rattle(float t)
         {
-            if (t < drop)
+            if (t < Drop)
             {
                 return 0f;
             }
 
-            var u = (t - drop) / (1f - drop);
-
-            // Nine degrees, which is under one pocket. It was twenty-two -- more than
-            // two pockets either way -- so the ball hopped back and forth across the
-            // wheel instead of rattling in it.
-            var envelope = (1f - u) * (1f - u) * RampIn(u) * 9f;
-
-            // The intervals shorten as it settles, the way a dropped ball's do, so the
-            // phase runs a little faster than the clock rather than at a fixed beat.
+            var u = (t - Drop) / (1f - Drop);
+            var envelope = (1f - u) * (1f - u) * RampIn(u) * 3f;
             var phase = Mathf.Pow(u, 1.25f);
 
-            return envelope * ((Mathf.Sin(phase * 17f) * 0.7f) + (Mathf.Sin(phase * 39f) * 0.3f));
+            return envelope * ((Mathf.Sin(phase * 7f) * 0.7f) + (Mathf.Sin(phase * 15f) * 0.3f));
         }
 
         /// <summary>
-        /// How far out the ball is. It holds the track while it is fast, then falls
-        /// inward, bouncing back up the slope a couple of times on the way -- a ball
-        /// that slides straight down reads as a bead on a wire.
+        /// How far out the ball is: the track while it is fast, then falling inward and
+        /// bouncing back up the slope a couple of times. A ball that slides straight
+        /// down reads as a bead on a wire.
         /// </summary>
-        private static float Radius(float t, float drop)
+        private static float Radius(float t)
         {
-            if (t < drop)
+            if (t < Drop)
             {
                 return TrackRadius;
             }
 
-            var u = (t - drop) / (1f - drop);
+            var u = (t - Drop) / (1f - Drop);
             var fall = Mathf.SmoothStep(TrackRadius, RestRadius, u);
-
-            // Bounces back up the slope, fading in so the ball is already falling
-            // before the first one, and dying out before it settles. A ball that slides
-            // straight down reads as a bead on a wire; one that starts bouncing on the
-            // frame it leaves the track reads as a glitch.
             var phase = Mathf.Pow(u, 1.25f);
-            var bounce = Mathf.Abs(Mathf.Sin(phase * 8f)) * (1f - u) * (1f - u) * RampIn(u) * 0.055f;
+            var bounce = Mathf.Abs(Mathf.Sin(phase * 8f)) * (1f - u) * (1f - u) * RampIn(u) * 0.045f;
 
             return fall + bounce;
         }
@@ -323,6 +328,7 @@ namespace Roulette.Client
                 return;
             }
 
+            _ballAngle = ballAngle;
             _ballPivot.localRotation = Quaternion.Euler(0f, 0f, -ballAngle);
             _ball.anchoredPosition = new Vector2(0f, ballRadius * _diameter * 0.5f);
         }
@@ -334,8 +340,8 @@ namespace Roulette.Client
         // ---------------------------------------------------------------- the drawing
 
         /// <summary>
-        /// The bowl: the outer rim and the track the ball runs on. Transparent inside,
-        /// where the head shows through.
+        /// The bowl: the gold rim, the wooden apron with its deflectors, and the track
+        /// the ball runs on. Transparent inside, where the head shows through.
         /// </summary>
         private static Sprite BowlSprite()
         {
@@ -348,28 +354,34 @@ namespace Roulette.Client
 
                 if (f > RimInner)
                 {
-                    // The rim, lit from the top left and darkening to its outer edge.
+                    // A bright gold band with a bevel: lighter towards its middle so it
+                    // reads as a rounded edge rather than a flat hoop.
                     var g = Mathf.InverseLerp(1f, RimInner, f);
-                    return Shade(Lerp(RimDark, RimLight, g * 0.75f), light);
-                }
-
-                if (f > TrackInner)
-                {
-                    // The track. Darker where it meets the rim and brighter towards the
-                    // inside, so it reads as a channel the ball sits in rather than a
-                    // flat band.
-                    var g = Mathf.InverseLerp(RimInner, TrackInner, f);
-                    var c = Lerp(TrackDark, TrackLight, Mathf.Sin(g * Mathf.PI) * 0.9f);
-                    return Shade(c, light);
+                    return Shade(Lerp(GoldDeep, GoldBright, Mathf.Sin(g * Mathf.PI) * 0.9f), light);
                 }
 
                 if (f > ApronInner)
                 {
-                    // The apron sloping down to the pockets, with a gold lip at the
-                    // bottom of it.
-                    var g = Mathf.InverseLerp(TrackInner, ApronInner, f);
-                    var c = Lerp(Apron, GoldDim, Mathf.SmoothStep(0f, 1f, g) * 0.55f);
-                    return Shade(c, light);
+                    // The wooden apron the ball runs on, darker at its outside.
+                    var g = Mathf.InverseLerp(RimInner, ApronInner, f);
+                    var wood = Lerp(WoodDark, Wood, Mathf.SmoothStep(0f, 1f, g));
+
+                    // Eight gold deflectors, as on a real bowl.
+                    var mid = (RimInner + ApronInner) * 0.5f;
+                    var diamond = Mathf.Abs(Mathf.DeltaAngle(angle, Mathf.Round(angle / 45f) * 45f));
+                    var near = Mathf.Abs(f - mid);
+
+                    if ((diamond / 3.2f) + (near / 0.020f) < 1f)
+                    {
+                        wood = Lerp(GoldBright, Gold, (diamond / 3.2f));
+                    }
+
+                    return Shade(wood, light);
+                }
+
+                if (f > OuterGoldInner)
+                {
+                    return Shade(Gold, light);
                 }
 
                 return Clear;
@@ -377,9 +389,9 @@ namespace Roulette.Client
         }
 
         /// <summary>
-        /// The head: the pockets, their frets, and the cone. Drawn from the pocket list
-        /// the server sent, so the colours and their order cannot disagree with the
-        /// wheel it is settling against.
+        /// The head: the pockets with their numbers, the green inner ring, and the cone.
+        /// Drawn from the pocket list the server sent, so the colours and their order
+        /// cannot disagree with the wheel it is settling against.
         /// </summary>
         private static Sprite HeadSprite(IReadOnlyList<PocketInfo> pockets)
         {
@@ -388,31 +400,18 @@ namespace Roulette.Client
 
             return Paint((f, angle, light) =>
             {
-                if (f > ApronInner)
+                if (f > OuterGoldInner)
                 {
                     return Clear;
                 }
 
                 if (f > PocketInner)
                 {
-                    // **Pocket i is centred on i * step, not started there.** The
-                    // numbers are placed at i * step and the ball lands there, so a
-                    // wedge that merely begins at that angle puts every number half a
-                    // pocket clockwise of the colour it belongs to. Adding half a step
-                    // before the divide moves the boundaries to either side of the
-                    // label instead of onto it.
+                    // **Pocket i is centred on i * step, not started there.** The numbers
+                    // are placed at i * step and the ball lands there, so a wedge that
+                    // merely begins at that angle puts every number half a pocket
+                    // clockwise of the colour it belongs to.
                     var index = (int)((angle + (step * 0.5f)) / step) % pockets.Count;
-
-                    // Frets are a constant thickness in pixels, so their angular width
-                    // has to grow as the radius shrinks or they would taper to nothing
-                    // at the inside of the ring.
-                    var pixels = Mathf.Max(f * half, 1f);
-                    var fret = 2.6f / pixels * Mathf.Rad2Deg;
-
-                    // Distance to the nearer edge of this pocket, now that the pocket
-                    // straddles its own angle.
-                    var offset = Mathf.DeltaAngle(index * step, angle);
-                    var edge = (step * 0.5f) - Mathf.Abs(offset);
 
                     var pocket = pockets[index].Colour switch
                     {
@@ -421,41 +420,61 @@ namespace Roulette.Client
                         _ => Black,
                     };
 
-                    // A little darker towards the hub, so the pockets have depth.
-                    var depth = Mathf.InverseLerp(PocketInner, ApronInner, f);
-                    pocket = Lerp(Scale(pocket, 0.55f), pocket, depth);
+                    // Frets are a constant thickness in pixels, so their angular width
+                    // grows as the radius shrinks or they taper away at the inside.
+                    var pixels = Mathf.Max(f * half, 1f);
+                    var fret = 2.4f / pixels * Mathf.Rad2Deg;
 
-                    var onFret = Smooth(edge, fret, fret + (0.9f / pixels * Mathf.Rad2Deg));
-                    var lip = Smooth(f, ApronInner - 0.012f, ApronInner - 0.004f);
+                    var offset = Mathf.DeltaAngle(index * step, angle);
+                    var edge = (step * 0.5f) - Mathf.Abs(offset);
 
-                    var c = Lerp(Gold, pocket, onFret);
-                    c = Lerp(c, GoldDim, lip);
+                    var onFret = Smooth(edge, fret, fret + (1.1f / pixels * Mathf.Rad2Deg));
 
-                    return Shade(c, light);
+                    return Shade(Lerp(Gold, pocket, onFret), light);
                 }
 
-                if (f > HubRing)
+                if (f > MidGoldInner)
                 {
                     return Shade(Gold, light);
                 }
 
-                // The cone, and the turret sitting on it.
-                var cone = Lerp(ConeLight, ConeDark, Mathf.InverseLerp(0f, HubRing, f));
+                if (f > GreenInner)
+                {
+                    // The green ring, with a fine gold line off every fret. It is the
+                    // detail that most says "roulette wheel" rather than "pie chart".
+                    var pixels = Mathf.Max(f * half, 1f);
+                    var line = 1.5f / pixels * Mathf.Rad2Deg;
 
-                if (f < 0.055f)
-                {
-                    cone = Lerp(Gold, GoldDim, f / 0.055f);
+                    var offset = Mathf.DeltaAngle(Mathf.Round(angle / step) * step, angle);
+                    var onLine = Smooth(Mathf.Abs(offset), line, line + (1.2f / pixels * Mathf.Rad2Deg));
+
+                    var band = Mathf.InverseLerp(GreenInner, MidGoldInner, f);
+                    var green = Lerp(Scale(GreenRing, 0.75f), GreenRing, band);
+
+                    return Shade(Lerp(Gold, green, onLine), light);
                 }
-                else if (f < 0.075f)
+
+                if (f > ConeOuter)
                 {
-                    cone = GoldDim;
+                    return Shade(Gold, light);
                 }
-                else if (f < 0.30f)
+
+                // The cone, and the spider standing on it.
+                var cone = Lerp(GoldBright, GoldDeep, Mathf.InverseLerp(0f, ConeOuter, f) * 0.85f);
+
+                // Four arms and a boss, which is what stops the middle of the wheel
+                // looking like a plain disc while it turns.
+                var arm = Mathf.Abs(Mathf.DeltaAngle(angle, Mathf.Round(angle / 90f) * 90f));
+                var armWidth = Mathf.Lerp(7f, 2.2f, Mathf.InverseLerp(0.06f, ConeOuter, f));
+
+                if (f > 0.06f && f < ConeOuter - 0.02f && arm < armWidth)
                 {
-                    // Four spokes out of the turret, which is what stops the middle of
-                    // the wheel looking like a plain disc while it turns.
-                    var spoke = Mathf.Abs(Mathf.Sin(angle * Mathf.Deg2Rad * 2f));
-                    cone = Lerp(Lerp(cone, GoldDim, 0.75f), cone, Smooth(spoke, 0.05f, 0.22f));
+                    cone = Lerp(GoldBright, cone, Smooth(arm, armWidth - 1.4f, armWidth));
+                }
+
+                if (f < 0.075f)
+                {
+                    cone = Lerp(GoldBright, Gold, f / 0.075f);
                 }
 
                 return Shade(cone, light);
@@ -463,11 +482,11 @@ namespace Roulette.Client
         }
 
         /// <summary>
-        /// Runs a function over every pixel of a square texture, handing it the radius
-        /// as a fraction, the angle clockwise from the top, and a lighting factor.
+        /// Runs a function over every pixel of a square texture, handing it the radius as
+        /// a fraction, the angle clockwise from the top, and a lighting factor.
         ///
         /// The fraction is of the **radius**, not the diameter. Getting that wrong is
-        /// what drew the last pocket ring at twice its size.
+        /// what drew a pocket ring at twice its size and burst it out of the bowl.
         /// </summary>
         private static Sprite Paint(Func<float, float, float, Color32> shade)
         {
@@ -506,11 +525,11 @@ namespace Roulette.Client
                     // towards the edge. Together they stop the rings reading flat.
                     var nx = dx / half;
                     var ny = dy / half;
-                    var light = 1f + (0.20f * ((-nx * 0.65f) + (ny * 0.75f))) - (0.14f * f * f);
+                    var light = 1f + (0.18f * ((-nx * 0.6f) + (ny * 0.8f))) - (0.12f * f * f);
 
                     var c = shade(f, angle, light);
 
-                    // Feather the very edge of the disc so it is not a jagged circle.
+                    // Feather the very edge so the disc is not a jagged circle.
                     if (c.a > 0 && f > 0.99f)
                     {
                         c.a = (byte)(c.a * Mathf.Clamp01((1.002f - f) / 0.012f));
@@ -543,7 +562,7 @@ namespace Roulette.Client
 
         private static Color32 Shade(Color32 c, float light)
         {
-            light = Mathf.Clamp(light, 0.55f, 1.45f);
+            light = Mathf.Clamp(light, 0.6f, 1.4f);
 
             return new Color32(
                 (byte)Mathf.Clamp(c.r * light, 0f, 255f),
@@ -552,14 +571,14 @@ namespace Roulette.Client
                 c.a);
         }
 
-        private static float Smooth(float v, float a, float b) => Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(a, b, v));
+        private static float Smooth(float v, float a, float b) =>
+            Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(a, b, v));
 
         // ---------------------------------------------------------------- the pieces
 
         /// <summary>
-        /// The numbers, as labels parented to the head so they turn with it. Text
-        /// rather than baked into the ring, because text baked at this size goes to
-        /// mush and a label can be turned to sit radially the way a real wheel's does.
+        /// The numbers, as labels parented to the head so they turn with it, sitting
+        /// inside the pocket blocks the way a real wheel prints them.
         /// </summary>
         private static void BuildNumbers(IReadOnlyList<PocketInfo> pockets, float diameter)
         {
@@ -572,9 +591,9 @@ namespace Roulette.Client
 
                 var text = go.AddComponent<TextMeshProUGUI>();
                 text.text = pockets[i].Label;
-                text.fontSize = diameter * 0.031f;
+                text.fontSize = diameter * 0.034f;
                 text.alignment = TextAlignmentOptions.Center;
-                text.color = Ink;
+                text.color = Numerals;
                 text.raycastTarget = false;
                 text.enableWordWrapping = false;
 
@@ -586,7 +605,7 @@ namespace Roulette.Client
                 var rect = (RectTransform)go.transform;
                 rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
                 rect.pivot = new Vector2(0.5f, 0.5f);
-                rect.sizeDelta = new Vector2(diameter * 0.085f, diameter * 0.05f);
+                rect.sizeDelta = new Vector2(diameter * 0.09f, diameter * 0.055f);
 
                 var angle = i * step;
                 var radians = (90f - angle) * Mathf.Deg2Rad;
@@ -602,7 +621,7 @@ namespace Roulette.Client
 
         /// <summary>
         /// The marker the winning pocket comes to rest under. Outside the head so it
-        /// does not turn: it is the fixed point the whole animation is aimed at, and a
+        /// does not turn: it is the fixed point the animation is aimed at, and a
         /// spinning marker would mean nothing.
         /// </summary>
         private static void BuildMarker(RectTransform root, float diameter)
@@ -610,19 +629,19 @@ namespace Roulette.Client
             var marker = NewImage("Marker", root, Color.white);
             marker.anchorMin = marker.anchorMax = new Vector2(0.5f, 0.5f);
             marker.pivot = new Vector2(0.5f, 1f);
-            marker.sizeDelta = new Vector2(diameter * 0.024f, diameter * 0.062f);
-            marker.anchoredPosition = new Vector2(0f, diameter * 0.5f * 1.01f);
+            marker.sizeDelta = new Vector2(diameter * 0.022f, diameter * 0.055f);
+            marker.anchoredPosition = new Vector2(0f, diameter * 0.5f * 1.02f);
 
             var image = marker.GetComponent<Image>();
             image.sprite = Textures.RoundedBox(
-                5, new Color(0.80f, 0.69f, 0.38f, 1f), new Color(0.16f, 0.13f, 0.08f, 1f), 2);
+                5, new Color(0.89f, 0.76f, 0.46f, 1f), new Color(0.18f, 0.14f, 0.08f, 1f), 2);
             image.type = Image.Type.Sliced;
         }
 
         private static void BuildBall(RectTransform root, float diameter)
         {
-            // A pivot at the centre carrying the ball out at a radius: rotating the
-            // pivot walks the ball round the track, which is one transform instead of
+            // A pivot at the centre carrying the ball out at a radius: rotating the pivot
+            // walks the ball round the track, which is one transform instead of
             // trigonometry every frame.
             _ballPivot = NewImage("BallPivot", root, Clear);
             _ballPivot.anchorMin = _ballPivot.anchorMax = new Vector2(0.5f, 0.5f);
@@ -646,9 +665,8 @@ namespace Roulette.Client
             }
             else
             {
-                // Drawn rather than missing: a spin with no ball in it is unreadable.
                 image.sprite = Textures.RoundedBox(
-                    64, new Color(0.95f, 0.93f, 0.83f, 1f), new Color(0.55f, 0.52f, 0.44f, 1f), 2);
+                    64, new Color(0.96f, 0.94f, 0.86f, 1f), new Color(0.55f, 0.52f, 0.44f, 1f), 2);
                 image.type = Image.Type.Sliced;
             }
 
