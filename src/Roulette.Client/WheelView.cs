@@ -93,19 +93,45 @@ namespace Roulette.Client
         private const float BallSize = 0.044f;
 
         // ---- motion -----------------------------------------------------------------
+        //
+        // Every one of these is rolled fresh for each spin rather than fixed, because a
+        // wheel that takes exactly eight seconds and exactly five turns every single
+        // time stops being a wheel and becomes a loading bar. Ranges, not constants.
+        //
+        // **None of it can change where the ball lands.** The pocket is decided by the
+        // server before any of this is rolled; these only decide how long it takes to
+        // get there and how it looks on the way.
 
-        private const float Duration = 8.0f;
+        private const float MinDuration = 6.5f;
+        private const float MaxDuration = 9.5f;
 
         /// <summary>Where the ball leaves the track and starts falling in.</summary>
-        private const float Drop = 0.62f;
+        private const float MinDrop = 0.55f;
+        private const float MaxDrop = 0.68f;
 
         /// <summary>Friction. Angular velocity decays as e^-kt, so the journey left does too.</summary>
-        private const float Decay = 3.2f;
+        private const float MinDecay = 2.8f;
+        private const float MaxDecay = 3.7f;
 
-        /// <summary>At least this much travel relative to the head, in degrees.</summary>
-        private const float MinRelative = 360f * 5f;
+        /// <summary>At least this many turns of travel relative to the head.</summary>
+        private const float MinTurns = 4.0f;
+        private const float MaxTurns = 7.0f;
 
-        private const float HeadTurns = 2.0f;
+        private const float MinHeadTurns = 1.5f;
+        private const float MaxHeadTurns = 2.8f;
+
+        /// <summary>
+        /// The most the ball may move between frames, as a multiple of its own width.
+        ///
+        /// **This is the ceiling the variance is not allowed to breach.** A ball that
+        /// covers more than its own width in a frame never overlaps itself between
+        /// frames and reads as a row of separate balls -- which is what "the ball
+        /// hitches" turned out to mean, after two rounds of hunting it as a
+        /// discontinuity that was never there. Rolling a short duration with a lot of
+        /// turns would walk straight back into it, so a rolled profile that would
+        /// exceed this has its turns cut until it does not.
+        /// </summary>
+        private const float MaxStepPerFrame = 0.88f;
 
         private const int Texture = 1024;
 
@@ -136,21 +162,91 @@ namespace Roulette.Client
         /// <summary>Where the ball is now, so a new spin launches from it rather than jumping.</summary>
         private static float _ballAngle;
 
+        /// <summary>Which way the last spin went, so the next one goes the other way.</summary>
+        private static bool _clockwise;
+
         private static Coroutine _spinning;
 
         internal static bool IsSpinning => _spinning != null;
 
+        /// <summary>How one spin differs from the last. Presentation only.</summary>
+        private readonly struct Profile
+        {
+            internal Profile(float duration, float drop, float decay, float turns, float headTurns, float direction)
+            {
+                Duration = duration;
+                Drop = drop;
+                Decay = decay;
+                Turns = turns;
+                HeadTurns = headTurns;
+                Direction = direction;
+            }
+
+            internal float Duration { get; }
+
+            internal float Drop { get; }
+
+            internal float Decay { get; }
+
+            internal float Turns { get; }
+
+            internal float HeadTurns { get; }
+
+            /// <summary>+1 for a head turning clockwise, -1 for one going the other way.</summary>
+            internal float Direction { get; }
+        }
+
+        /// <summary>
+        /// Rolls a spin.
+        ///
+        /// The direction alternates rather than being random, because that is what a
+        /// croupier does -- the wheel goes the other way each time, and the ball always
+        /// opposes it. Random would give the same way twice often enough to look like a
+        /// mistake.
+        ///
+        /// The turns are then cut, if need be, so the ball cannot outrun its own width
+        /// between frames. That check is what stops a short duration and a lot of turns
+        /// walking back into the strobing this spent three rounds fixing.
+        /// </summary>
+        private static Profile Roll(float diameter)
+        {
+            _clockwise = !_clockwise;
+
+            var duration = UnityEngine.Random.Range(MinDuration, MaxDuration);
+            var decay = UnityEngine.Random.Range(MinDecay, MaxDecay);
+            var headTurns = UnityEngine.Random.Range(MinHeadTurns, MaxHeadTurns);
+            var turns = UnityEngine.Random.Range(MinTurns, MaxTurns);
+
+            // No ceiling check here. It used to trim the turns to fit, and it did not
+            // work: Run rounds the travel up to a whole number of laps afterwards, which
+            // put back most of a lap of whatever had just been trimmed. Sweeping four
+            // hundred rolled spins found the ball back over its own width per frame at
+            // launch. The check belongs after that rounding, where the real figure is
+            // known -- see Run.
+            return new Profile(
+                duration,
+                UnityEngine.Random.Range(MinDrop, MaxDrop),
+                decay,
+                turns,
+                headTurns,
+                _clockwise ? 1f : -1f);
+        }
+
         /// <summary>
         /// How far the ball moves between frames at its quickest, as a multiple of its
-        /// own width. **Over 1 and it strobes**, which is the whole reason the motion
-        /// constants are what they are. Logged once so a future change to any of them
-        /// gets told immediately rather than being reported as a stutter weeks later.
+        /// own width. Over 1 and it strobes.
         /// </summary>
-        private static float StepPerFrame(float diameter)
+        private static float StepPerFrame(
+            float diameter, float duration, float decay, float turns, float headTurns)
         {
-            var launch = MinRelative * Decay / (1f - Mathf.Exp(-Decay)) / Duration;
-            var head = 360f * HeadTurns * 2.4f / Duration;
-            var degreesPerFrame = Mathf.Abs(head - launch) / 120f;
+            var launch = 360f * turns * decay / (1f - Mathf.Exp(-decay)) / duration;
+            var head = 360f * headTurns * 2.4f / duration;
+
+            // What matters is how far the ball crosses the *screen*, not how fast it
+            // moves relative to the head. Its screen speed is the relative speed less
+            // the head's, because the head is carrying it the other way -- the ball
+            // rides the head a little even while running against it.
+            var degreesPerFrame = Mathf.Abs(launch - head) / 120f;
             var arc = degreesPerFrame * Mathf.Deg2Rad * TrackRadius * diameter * 0.5f;
 
             return arc / (BallSize * diameter);
@@ -189,10 +285,9 @@ namespace Roulette.Client
 
             Apply(0f, 0f, TrackRadius);
 
-            var step = StepPerFrame(diameter);
             RouletteClientPlugin.Log.LogInfo(
-                $"[Roulette] wheel built, {pockets.Count} pockets. Ball moves {step:0.00}x its own "
-                + $"width per frame at launch ({(step > 1f ? "OVER 1 -- it will strobe" : "under 1, smooth")}).");
+                $"[Roulette] wheel built with {pockets.Count} pockets. Every spin rolls its own "
+                + "duration, turns, friction and drop, and alternates direction.");
 
             return root.gameObject;
         }
@@ -221,28 +316,62 @@ namespace Roulette.Client
 
         private static IEnumerator Run(int position, Action onFinished)
         {
+            var spin = Roll(_diameter);
+
             var headFrom = _headAngle;
-            var headTo = headFrom + (360f * HeadTurns);
+            var headTo = headFrom + (360f * spin.HeadTurns * spin.Direction);
             var landAt = PocketAngle(position);
 
             // Launch from wherever the ball is sitting rather than from wherever the
             // arithmetic happens to start, so the first frame of a spin is a ball
-            // setting off rather than a ball teleporting. Whole turns are added until
-            // it is far enough to be a spin.
+            // setting off rather than a ball teleporting. Whole turns are added, in the
+            // head's own direction, until it is far enough to be a spin.
+            //
+            // The relative angle carries the head's sign, and that is what makes the
+            // ball oppose it: the ball's own velocity is the negative of this term, so
+            // a head going one way always has a ball going the other.
             var need = _ballAngle - headFrom - landAt;
-            var relative = need + (360f * Mathf.Ceil((MinRelative - need) / 360f));
+            var turns = Mathf.Ceil(((360f * spin.Turns) - (spin.Direction * need)) / 360f);
+            var relative = need + (360f * turns * spin.Direction);
+
+            // Now that the real travel is known -- rounding up to a whole lap can add
+            // most of another one -- check what it does to the ball's speed on screen
+            // and bring it back under its own width per frame.
+            //
+            // Lengthening the spin is the first lever, because the ball still goes
+            // round as many times and merely takes longer about it. But only so far:
+            // solving it by time alone produced spins of fourteen seconds, which is no
+            // longer a spin, it is a wait. Past the ceiling the laps come off instead,
+            // one at a time. Neither can move where the ball lands -- any relative
+            // travel works, because it is the decay to zero that does the landing.
+            var duration = spin.Duration;
+            var ratio = StepPerFrame(
+                _diameter, duration, spin.Decay, Mathf.Abs(relative) / 360f, spin.HeadTurns);
+
+            if (ratio > MaxStepPerFrame)
+            {
+                duration = Mathf.Min(duration * ratio / MaxStepPerFrame, MaxDuration);
+
+                while (Mathf.Abs(relative) > 360f * MinTurns
+                       && StepPerFrame(_diameter, duration, spin.Decay,
+                              Mathf.Abs(relative) / 360f, spin.HeadTurns) > MaxStepPerFrame)
+                {
+                    relative -= 360f * spin.Direction;
+                }
+            }
 
             var elapsed = 0f;
 
-            while (elapsed < Duration)
+            while (elapsed < duration)
             {
                 elapsed += Time.unscaledDeltaTime;
-                var t = Mathf.Clamp01(elapsed / Duration);
+                var t = Mathf.Clamp01(elapsed / duration);
 
                 var head = Mathf.Lerp(headFrom, headTo, EaseOut(t, 2.4f));
-                var ball = head + landAt + (relative * Friction(t)) + Rattle(t);
+                var ball = head + landAt + (relative * Friction(t, spin.Decay))
+                           + (Rattle(t, spin.Drop) * spin.Direction);
 
-                Apply(head, ball, Radius(t));
+                Apply(head, ball, Radius(t, spin.Drop));
 
                 yield return null;
             }
@@ -262,10 +391,10 @@ namespace Roulette.Client
         /// scaled so it is precisely 0 at the end -- an exponential never actually
         /// arrives, and "nearly there" is a ball resting a fraction out of its pocket.
         /// </summary>
-        private static float Friction(float t)
+        private static float Friction(float t, float decay)
         {
-            var e = Mathf.Exp(-Decay * t);
-            var end = Mathf.Exp(-Decay);
+            var e = Mathf.Exp(-decay * t);
+            var end = Mathf.Exp(-decay);
             var remaining = (e - end) / (1f - end);
 
             // **The taper is why the ball no longer stops dead.**
@@ -297,14 +426,14 @@ namespace Roulette.Client
         /// Zero at the end, like everything else here, so however lively it looks it
         /// cannot move where the ball finishes.
         /// </summary>
-        private static float Rattle(float t)
+        private static float Rattle(float t, float drop)
         {
-            if (t < Drop)
+            if (t < drop)
             {
                 return 0f;
             }
 
-            var u = (t - Drop) / (1f - Drop);
+            var u = (t - drop) / (1f - drop);
             var envelope = (1f - u) * (1f - u) * RampIn(u) * 3f;
             var phase = Mathf.Pow(u, 1.25f);
 
@@ -316,14 +445,14 @@ namespace Roulette.Client
         /// bouncing back up the slope a couple of times. A ball that slides straight
         /// down reads as a bead on a wire.
         /// </summary>
-        private static float Radius(float t)
+        private static float Radius(float t, float drop)
         {
-            if (t < Drop)
+            if (t < drop)
             {
                 return TrackRadius;
             }
 
-            var u = (t - Drop) / (1f - Drop);
+            var u = (t - drop) / (1f - drop);
             var fall = Mathf.SmoothStep(TrackRadius, RestRadius, u);
             var phase = Mathf.Pow(u, 1.25f);
             var bounce = Mathf.Abs(Mathf.Sin(phase * 8f)) * (1f - u) * (1f - u) * RampIn(u) * 0.045f;
@@ -528,42 +657,75 @@ namespace Roulette.Client
             var pixels = new Color32[Texture * Texture];
             var half = Texture / 2f;
 
+            // **Every ring boundary was a hard cut, and that is the jaggedness.** The
+            // frets were antialiased by hand and the outer edge was feathered, but the
+            // dozen concentric boundaries between rim, apron, pockets, green and cone
+            // each stepped straight from one colour to the next at whole pixels -- so
+            // every circle in the wheel had a staircase on it.
+            //
+            // Rather than hand-smooth each one, every pixel is sampled four times on a
+            // half-pixel grid and averaged. That antialiases everything at once,
+            // including the spider's arms and the deflectors, and it cannot be
+            // forgotten when a new ring is added. It costs one pass over four million
+            // samples, once, when the table is first opened.
+            var offsets = new[] { -0.25f, 0.25f };
+
             for (var y = 0; y < Texture; y++)
             {
-                var dy = y - half;
-
                 for (var x = 0; x < Texture; x++)
                 {
-                    var dx = x - half;
-                    var f = Mathf.Sqrt((dx * dx) + (dy * dy)) / half;
+                    float r = 0f, g = 0f, b = 0f, a = 0f;
 
-                    if (f > 1.002f)
+                    foreach (var oy in offsets)
+                    {
+                        var dy = y + oy - half;
+
+                        foreach (var ox in offsets)
+                        {
+                            var dx = x + ox - half;
+                            var f = Mathf.Sqrt((dx * dx) + (dy * dy)) / half;
+
+                            if (f > 1f)
+                            {
+                                continue;
+                            }
+
+                            var angle = Mathf.Atan2(dx, dy) * Mathf.Rad2Deg;
+                            if (angle < 0f)
+                            {
+                                angle += 360f;
+                            }
+
+                            // A soft key light from the upper left, and a gentle
+                            // darkening towards the edge, so the rings do not read flat.
+                            var nx = dx / half;
+                            var ny = dy / half;
+                            var light = 1f + (0.18f * ((-nx * 0.6f) + (ny * 0.8f))) - (0.12f * f * f);
+
+                            var c = shade(f, angle, light);
+
+                            // Premultiplied while averaging, or a transparent sample
+                            // drags its colour into the ones beside it and leaves a
+                            // dark fringe around the rim.
+                            var w = c.a / 255f;
+                            r += c.r * w;
+                            g += c.g * w;
+                            b += c.b * w;
+                            a += w;
+                        }
+                    }
+
+                    if (a <= 0.0001f)
                     {
                         pixels[(y * Texture) + x] = Clear;
                         continue;
                     }
 
-                    var angle = Mathf.Atan2(dx, dy) * Mathf.Rad2Deg;
-                    if (angle < 0f)
-                    {
-                        angle += 360f;
-                    }
-
-                    // A soft key light from the upper left, and a gentle darkening
-                    // towards the edge. Together they stop the rings reading flat.
-                    var nx = dx / half;
-                    var ny = dy / half;
-                    var light = 1f + (0.18f * ((-nx * 0.6f) + (ny * 0.8f))) - (0.12f * f * f);
-
-                    var c = shade(f, angle, light);
-
-                    // Feather the very edge so the disc is not a jagged circle.
-                    if (c.a > 0 && f > 0.99f)
-                    {
-                        c.a = (byte)(c.a * Mathf.Clamp01((1.002f - f) / 0.012f));
-                    }
-
-                    pixels[(y * Texture) + x] = c;
+                    pixels[(y * Texture) + x] = new Color32(
+                        (byte)Mathf.Clamp(r / a, 0f, 255f),
+                        (byte)Mathf.Clamp(g / a, 0f, 255f),
+                        (byte)Mathf.Clamp(b / a, 0f, 255f),
+                        (byte)Mathf.Clamp(a / offsets.Length / offsets.Length * 255f, 0f, 255f));
                 }
             }
 
