@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -186,6 +186,10 @@ namespace Roulette.Client
             {
                 if (_builtOnRight == OnRight)
                 {
+                    // The row is shared with the game's own tabs and with whatever
+                    // other mods have added, and it is over-subscribed easily. See
+                    // TabCrowding.
+                    TabCrowding.Apply(_tab);
                     return;
                 }
 
@@ -209,6 +213,7 @@ namespace Roulette.Client
             }
 
             _tab = null;
+            TabCrowding.Forget();
         }
 
         // ------------------------------------------------------------------ finding it
