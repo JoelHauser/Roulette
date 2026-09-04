@@ -74,16 +74,23 @@ namespace Roulette.Client
         /// <summary>Where the ball runs before it drops: the wooden track.</summary>
         private const float TrackRadius = 0.905f;
 
-        /// <summary>Where it comes to rest: the outer end of a pocket, clear of the number.</summary>
-        private const float RestRadius = 0.800f;
+        /// <summary>
+        /// Where it comes to rest: the middle of the green ring.
+        ///
+        /// **The green ring is the pocket floor, not decoration.** The coloured band
+        /// carrying the numbers is the label above it; the slot a ball actually sits in
+        /// is the green segment beneath. Resting the ball in the number ring put it a
+        /// whole band too far out, sitting on the label rather than in the pocket.
+        /// </summary>
+        private const float RestRadius = 0.545f;
 
         /// <summary>
-        /// Ball diameter over wheel diameter. A pocket is about 0.068 of the diameter
-        /// across at the resting radius, so this fills roughly seven tenths of one --
-        /// it sits in a pocket rather than bridging two, and it is large enough that
-        /// its own width outruns how far it moves in a frame.
+        /// Ball diameter over wheel diameter. A green slot is about 0.046 of the
+        /// diameter across, so this very nearly fills one -- which is what a ball in a
+        /// pocket looks like -- while still being wider than the distance it covers
+        /// between frames.
         /// </summary>
-        private const float BallSize = 0.048f;
+        private const float BallSize = 0.044f;
 
         // ---- motion -----------------------------------------------------------------
 
@@ -440,16 +447,25 @@ namespace Roulette.Client
 
                 if (f > GreenInner)
                 {
-                    // The green ring, with a fine gold line off every fret. It is the
-                    // detail that most says "roulette wheel" rather than "pie chart".
+                    // The green ring: the slots the ball actually falls into, one under
+                    // each number.
+                    //
+                    // **The dividers go on the frets, not on the pockets.** Rounding to
+                    // the nearest multiple of step finds a pocket's centre, because that
+                    // is where pockets are centred -- so drawing the line there put a
+                    // gold bar down the middle of every slot and a join where the ball
+                    // was meant to sit. Half a step across from a centre is a boundary.
                     var pixels = Mathf.Max(f * half, 1f);
-                    var line = 1.5f / pixels * Mathf.Rad2Deg;
+                    var line = 1.6f / pixels * Mathf.Rad2Deg;
 
-                    var offset = Mathf.DeltaAngle(Mathf.Round(angle / step) * step, angle);
+                    var boundary = (Mathf.Round((angle / step) - 0.5f) + 0.5f) * step;
+                    var offset = Mathf.DeltaAngle(boundary, angle);
                     var onLine = Smooth(Mathf.Abs(offset), line, line + (1.2f / pixels * Mathf.Rad2Deg));
 
+                    // Darker towards the hub, so each slot reads as a recess rather than
+                    // a flat wedge.
                     var band = Mathf.InverseLerp(GreenInner, MidGoldInner, f);
-                    var green = Lerp(Scale(GreenRing, 0.75f), GreenRing, band);
+                    var green = Lerp(Scale(GreenRing, 0.72f), GreenRing, band);
 
                     return Shade(Lerp(Gold, green, onLine), light);
                 }
