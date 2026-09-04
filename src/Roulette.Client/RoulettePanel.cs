@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json.Linq;
@@ -36,13 +37,19 @@ namespace Roulette.Client
         private static TextMeshProUGUI _status;
         private static TextMeshProUGUI _result;
 
+        // The running fade, and whether it is on its way out. IsOpen has to read as
+        // closed the moment a close starts, or the tab toggles it straight back open
+        // again mid-fade.
+        private static Coroutine _fade;
+        private static bool _closing;
+
         private static JObject _lastReply;
         private static string _pocketSignature;
 
         /// <summary>What one chip is worth. The table minimum, until there is a chip tray.</summary>
         private static int _chip = 10_000;
 
-        internal static bool IsOpen => _root != null && _root.activeSelf;
+        internal static bool IsOpen => _root != null && _root.activeSelf && !_closing;
 
         internal static void Toggle()
         {
@@ -69,7 +76,9 @@ namespace Roulette.Client
                     return;
                 }
 
+                _closing = false;
                 _root.SetActive(true);
+                FadeTo(1f, null);
 
                 Canvas.ForceUpdateCanvases();
                 LayoutRebuilder.ForceRebuildLayoutImmediate((RectTransform)_root.transform);
@@ -84,10 +93,80 @@ namespace Roulette.Client
 
         internal static void Close()
         {
-            if (_root != null)
+            if (_root == null || !_root.activeSelf || _closing)
+            {
+                return;
+            }
+
+            _closing = true;
+
+            FadeTo(0f, () =>
             {
                 _root.SetActive(false);
+                _closing = false;
+            });
+        }
+
+        /// <summary>
+        /// Fades the whole panel, rather than switching it.
+        ///
+        /// The backdrop is nearly opaque, so toggling the canvas takes the screen from
+        /// menu to table and back in a single frame -- which is what makes leaving feel
+        /// like a jump cut. Both siblings settled on this and on the numbers below; it
+        /// is a port rather than a fresh attempt.
+        /// </summary>
+        private static void FadeTo(float target, Action done)
+        {
+            var group = _root == null ? null : _root.GetComponent<CanvasGroup>();
+            var host = RouletteClientPlugin.Instance;
+
+            if (group == null || host == null)
+            {
+                if (group != null)
+                {
+                    group.alpha = target;
+                }
+
+                done?.Invoke();
+                return;
             }
+
+            if (_fade != null)
+            {
+                host.StopCoroutine(_fade);
+            }
+
+            _fade = host.StartCoroutine(Fade(group, target, done));
+        }
+
+        private static IEnumerator Fade(CanvasGroup group, float target, Action done)
+        {
+            // A sixth of a second, linear, both directions -- the numbers Blackjack
+            // settled on and Poker kept, because that is the version that was tried and
+            // found to read correctly.
+            const float duration = 0.16f;
+
+            var start = group.alpha;
+            var elapsed = 0f;
+
+            // Clicks stop landing the moment a close begins, so a button pressed during
+            // the fade cannot fire at a table on its way out.
+            group.blocksRaycasts = target > 0f;
+            group.interactable = target > 0f;
+
+            while (elapsed < duration)
+            {
+                // Unscaled: the menu is not necessarily running at a normal timescale,
+                // and a fade that stalls with it would hang the panel open.
+                elapsed += Time.unscaledDeltaTime;
+                group.alpha = Mathf.Lerp(start, target, Mathf.Clamp01(elapsed / duration));
+                yield return null;
+            }
+
+            group.alpha = target;
+            _fade = null;
+
+            done?.Invoke();
         }
 
         internal static void OnEscape()
@@ -332,6 +411,10 @@ namespace Roulette.Client
             scaler.matchWidthOrHeight = 1f;
 
             _root = canvasObject;
+
+            // Faded rather than switched. See FadeTo.
+            var group = canvasObject.AddComponent<CanvasGroup>();
+            group.alpha = 0f;
 
             var backdrop = NewBox("Backdrop", canvasObject.transform, new Color(0f, 0f, 0f, 0.93f));
             Stretch(backdrop);

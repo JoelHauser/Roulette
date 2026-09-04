@@ -266,8 +266,20 @@ namespace Roulette.Client
         {
             var e = Mathf.Exp(-Decay * t);
             var end = Mathf.Exp(-Decay);
+            var remaining = (e - end) / (1f - end);
 
-            return (e - end) / (1f - end);
+            // **The taper is why the ball no longer stops dead.**
+            //
+            // An exponential reaches zero distance-to-go at the end but not zero
+            // *speed*: this one was still creeping at thirty degrees a second on the
+            // last frame, and then the loop finished and it froze. Nothing was wrong
+            // with where it stopped -- it was that it stopped rather than came to rest.
+            //
+            // Smoothstep is flat at both ends, so multiplying by its reverse over the
+            // last stretch brings the speed to nothing at the same moment the distance
+            // reaches nothing. The head's own ease is already flat at the end, so once
+            // this is too, everything settles instead of halting.
+            return remaining * (1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.80f, 1f, t)));
         }
 
         /// <summary>
