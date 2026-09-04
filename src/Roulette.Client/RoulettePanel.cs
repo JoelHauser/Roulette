@@ -23,7 +23,7 @@ namespace Roulette.Client
     {
         private const string RootName = "RouletteTableCanvas";
 
-        private const float WheelSize = 660f;
+        private const float WheelSize = 780f;
 
         private static readonly Color Gold = new Color(0.72f, 0.62f, 0.34f, 1f);
         private static readonly Color Ink = new Color(0.88f, 0.86f, 0.80f, 1f);
@@ -172,16 +172,16 @@ namespace Roulette.Client
             var position = (int?)last["Position"] ?? 0;
 
             SetStatus("No more bets.");
-            SetResult(string.Empty);
+            SetResult(string.Empty, null);
             BuildActions([]);
 
             WheelView.Spin(position, () =>
             {
                 var label = (string)last["Label"] ?? "?";
-                var colour = ((string)last["Colour"] ?? string.Empty).ToLowerInvariant();
+                var colour = (string)last["Colour"];
                 var profit = (int?)last["Profit"] ?? 0;
 
-                SetResult($"{label} {colour}");
+                SetResult(label, colour);
 
                 SetStatus(profit >= 0
                     ? $"Up {profit:N0} on the spin."
@@ -223,9 +223,14 @@ namespace Roulette.Client
             {
                 var last = table["Last"] as JObject;
 
-                SetResult(last != null && string.Equals(phase, "Settled", StringComparison.OrdinalIgnoreCase)
-                    ? $"{(string)last["Label"]} {((string)last["Colour"] ?? string.Empty).ToLowerInvariant()}"
-                    : string.Empty);
+                if (last != null && string.Equals(phase, "Settled", StringComparison.OrdinalIgnoreCase))
+                {
+                    SetResult((string)last["Label"], (string)last["Colour"]);
+                }
+                else
+                {
+                    SetResult(string.Empty, null);
+                }
             }
 
             BuildActions(Controls(phase, staked));
@@ -343,7 +348,7 @@ namespace Roulette.Client
             _wheelHolder.anchorMin = _wheelHolder.anchorMax = new Vector2(0.5f, 0.5f);
             _wheelHolder.pivot = new Vector2(0.5f, 0.5f);
             _wheelHolder.sizeDelta = new Vector2(WheelSize, WheelSize);
-            _wheelHolder.anchoredPosition = new Vector2(0f, 76f);
+            _wheelHolder.anchoredPosition = new Vector2(0f, 66f);
 
             _result = NewText("Result", canvasObject.transform, string.Empty, 44f, TextAlignmentOptions.Center);
             _result.rectTransform.anchorMin = new Vector2(0.5f, 0f);
@@ -424,12 +429,26 @@ namespace Roulette.Client
             }
         }
 
-        private static void SetResult(string text)
+        /// <summary>
+        /// The winning number, drawn in the colour it came up. A player looks here
+        /// first and should not have to read a word to know how it went.
+        /// </summary>
+        private static void SetResult(string label, string colour)
         {
-            if (_result != null)
+            if (_result == null)
             {
-                _result.text = text;
+                return;
             }
+
+            _result.text = string.IsNullOrEmpty(label) ? string.Empty : label;
+
+            _result.color = colour switch
+            {
+                "Red" => new Color(0.85f, 0.27f, 0.25f, 1f),
+                "Green" => new Color(0.35f, 0.78f, 0.50f, 1f),
+                "Black" => new Color(0.86f, 0.86f, 0.88f, 1f),
+                _ => Gold,
+            };
         }
 
         private static RectTransform NewBox(string name, Transform parent, Color colour)
