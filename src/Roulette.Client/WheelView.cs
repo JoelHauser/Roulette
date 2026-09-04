@@ -178,12 +178,22 @@ namespace Roulette.Client
             const float drop = 0.62f;
 
             var headFrom = _headAngle;
-            var headTo = headFrom + (360f * 4.25f);
+
+            // About 0.8 turns a second at its quickest, which is roughly what a croupier
+            // gives a real head. It was three times that and looked like a fairground
+            // ride.
+            var headTo = headFrom + (360f * 2.5f);
 
             // How far the ball travels relative to the head. Positive, which is what
             // makes it run against the head's direction: the head turns one way at a
-            // steady ease while this unwinds the other way much faster.
-            const float relative = 360f * 13f;
+            // steady ease while this unwinds the other way faster.
+            //
+            // **Sized so the ball peaks near three turns a second.** At thirteen turns
+            // it launched at seven a second, which at 120fps is twenty-two degrees a
+            // frame -- the ball jumped a tenth of the way round the track between
+            // frames and strobed rather than moved. A real ball leaves the hand at
+            // about three.
+            const float relative = 360f * 6.5f;
 
             var landAt = PocketAngle(position);
             var elapsed = 0f;
@@ -218,13 +228,28 @@ namespace Roulette.Client
         /// </summary>
         private static float Friction(float t)
         {
-            const float k = 4.2f;
+            const float k = 3.6f;
 
             var e = Mathf.Exp(-k * t);
             var end = Mathf.Exp(-k);
 
             return (e - end) / (1f - end);
         }
+
+        /// <summary>
+        /// Fades a bounce in over the first slice of the drop, with no step in value
+        /// **or in speed** at either end.
+        ///
+        /// This is what the hitch was. Both the rattle and the radial bounce began the
+        /// instant the ball left the track, and both started with a real slope: a sine
+        /// term climbing at four hundred degrees a second, and a bounce pushing the ball
+        /// outward the moment it was told to fall. The ball's velocity jumped in one
+        /// frame, twice, and the eye reads that as a stutter rather than as a bounce.
+        ///
+        /// Smoothstep has zero slope at both ends, so multiplying by it lets the
+        /// bouncing arrive rather than switch on.
+        /// </summary>
+        private static float RampIn(float u) => Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(u / 0.18f));
 
         /// <summary>
         /// The bouncing, which is decoration with one hard rule: exactly zero at the
@@ -244,9 +269,17 @@ namespace Roulette.Client
             }
 
             var u = (t - drop) / (1f - drop);
-            var envelope = (1f - u) * (1f - u) * 22f;
 
-            return envelope * ((Mathf.Sin(u * 15f) * 0.72f) + (Mathf.Sin(u * 37f) * 0.28f));
+            // Nine degrees, which is under one pocket. It was twenty-two -- more than
+            // two pockets either way -- so the ball hopped back and forth across the
+            // wheel instead of rattling in it.
+            var envelope = (1f - u) * (1f - u) * RampIn(u) * 9f;
+
+            // The intervals shorten as it settles, the way a dropped ball's do, so the
+            // phase runs a little faster than the clock rather than at a fixed beat.
+            var phase = Mathf.Pow(u, 1.25f);
+
+            return envelope * ((Mathf.Sin(phase * 17f) * 0.7f) + (Mathf.Sin(phase * 39f) * 0.3f));
         }
 
         /// <summary>
@@ -263,7 +296,13 @@ namespace Roulette.Client
 
             var u = (t - drop) / (1f - drop);
             var fall = Mathf.SmoothStep(TrackRadius, RestRadius, u);
-            var bounce = Mathf.Abs(Mathf.Sin(u * 7f)) * (1f - u) * (1f - u) * 0.075f;
+
+            // Bounces back up the slope, fading in so the ball is already falling
+            // before the first one, and dying out before it settles. A ball that slides
+            // straight down reads as a bead on a wire; one that starts bouncing on the
+            // frame it leaves the track reads as a glitch.
+            var phase = Mathf.Pow(u, 1.25f);
+            var bounce = Mathf.Abs(Mathf.Sin(phase * 8f)) * (1f - u) * (1f - u) * RampIn(u) * 0.055f;
 
             return fall + bounce;
         }
@@ -356,7 +395,13 @@ namespace Roulette.Client
 
                 if (f > PocketInner)
                 {
-                    var index = Mathf.Clamp((int)(angle / step), 0, pockets.Count - 1);
+                    // **Pocket i is centred on i * step, not started there.** The
+                    // numbers are placed at i * step and the ball lands there, so a
+                    // wedge that merely begins at that angle puts every number half a
+                    // pocket clockwise of the colour it belongs to. Adding half a step
+                    // before the divide moves the boundaries to either side of the
+                    // label instead of onto it.
+                    var index = (int)((angle + (step * 0.5f)) / step) % pockets.Count;
 
                     // Frets are a constant thickness in pixels, so their angular width
                     // has to grow as the radius shrinks or they would taper to nothing
@@ -364,8 +409,10 @@ namespace Roulette.Client
                     var pixels = Mathf.Max(f * half, 1f);
                     var fret = 2.6f / pixels * Mathf.Rad2Deg;
 
-                    var offset = angle - (index * step);
-                    var edge = Mathf.Min(offset, step - offset);
+                    // Distance to the nearer edge of this pocket, now that the pocket
+                    // straddles its own angle.
+                    var offset = Mathf.DeltaAngle(index * step, angle);
+                    var edge = (step * 0.5f) - Mathf.Abs(offset);
 
                     var pocket = pockets[index].Colour switch
                     {
