@@ -45,6 +45,9 @@ namespace Roulette.Client
         /// <summary>The round targets that sit on the joins between cells.</summary>
         private const float SpotSize = 19f;
 
+        /// <summary>How much wooden rail there is around the felt.</summary>
+        private const float Surround = 22f;
+
         private static readonly Color Felt = new Color(0.055f, 0.24f, 0.145f, 1f);
         private static readonly Color FeltEdge = new Color(0.72f, 0.62f, 0.34f, 1f);
         private static readonly Color Red = new Color(0.62f, 0.11f, 0.13f, 1f);
@@ -52,6 +55,13 @@ namespace Roulette.Client
         private static readonly Color Green = new Color(0.09f, 0.40f, 0.22f, 1f);
         private static readonly Color Ink = new Color(0.93f, 0.91f, 0.86f, 1f);
         private static readonly Color Spot = new Color(0.85f, 0.78f, 0.55f, 0.22f);
+
+        /// <summary>The wooden rail the felt is inset into.</summary>
+        private static readonly Color Rail = new Color(0.24f, 0.16f, 0.10f, 1f);
+
+        private static readonly Color RailEdge = new Color(0.55f, 0.44f, 0.24f, 1f);
+
+        private static Sprite _felt;
 
         private static TMP_FontAsset _font;
         private static Action<string, int> _onBet;
@@ -74,24 +84,31 @@ namespace Roulette.Client
             _onBet = onBet;
             Stacks.Clear();
 
-            var root = NewBox("Cloth", parent, Felt);
-            root.sizeDelta = new Vector2(Width, Height);
+            // A wooden surround with the felt inset into it, rather than a green
+            // rectangle with a line round it. The frame is what makes it read as a
+            // table you are standing at instead of a control panel.
+            var root = NewBox("Cloth", parent, Color.white);
+            root.sizeDelta = new Vector2(Width + (2f * Surround), Height + (2f * Surround));
 
-            var backing = root.GetComponent<Image>();
-            backing.sprite = Textures.RoundedBox(8, Felt, FeltEdge, 2);
-            backing.type = Image.Type.Sliced;
+            var frame = root.GetComponent<Image>();
+            frame.sprite = Textures.RoundedBox(14, Rail, RailEdge, 3);
+            frame.type = Image.Type.Sliced;
+
+            var felt = NewBox("Felt", root, Color.white);
+            felt.sizeDelta = new Vector2(Width, Height);
+            felt.GetComponent<Image>().sprite = FeltSprite();
 
             // Origin at the top left of the number grid, which is one cell in from the
             // left edge because the zero has that column to itself.
             var left = (-Width * 0.5f) + Cell;
             var top = Height * 0.5f;
 
-            BuildZero(root, left, top);
-            BuildNumbers(root, left, top);
-            BuildColumnBets(root, left, top);
-            BuildDozens(root, left, top);
-            BuildOutside(root, left, top);
-            BuildLineBets(root, layout, left, top);
+            BuildZero(felt, left, top);
+            BuildNumbers(felt, left, top);
+            BuildColumnBets(felt, left, top);
+            BuildDozens(felt, left, top);
+            BuildOutside(felt, left, top);
+            BuildLineBets(felt, layout, left, top);
 
             return root.gameObject;
         }
@@ -120,9 +137,65 @@ namespace Roulette.Client
             {
                 if (Stacks.TryGetValue(Key(bet.Kind, bet.Selection), out var stack))
                 {
-                    ChipView.Build(stack, bet.Amount, _font, size: 30f, maxChips: 3);
+                    ChipView.BuildOnCloth(stack, bet.Amount, _font, size: 34f);
                 }
             }
+        }
+
+        /// <summary>
+        /// The felt: green, with a grain to it and a vignette towards the rail.
+        ///
+        /// Flat colour is what made this look like a form rather than a table. Cloth is
+        /// never one value -- it is darker where it meets the wood and it has a weave.
+        /// Both are cheap to fake and neither survives being left out.
+        /// </summary>
+        private static Sprite FeltSprite()
+        {
+            if (_felt != null)
+            {
+                return _felt;
+            }
+
+            const int w = 512;
+            const int h = 192;
+
+            var texture = new Texture2D(w, h, TextureFormat.RGBA32, false)
+            {
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Bilinear,
+                hideFlags = HideFlags.HideAndDontSave,
+            };
+
+            var pixels = new Color32[w * h];
+            var random = new System.Random(4517);
+
+            for (var y = 0; y < h; y++)
+            {
+                for (var x = 0; x < w; x++)
+                {
+                    // Darker towards the edges, so the middle of the cloth lifts.
+                    var u = ((x / (float)w) - 0.5f) * 2f;
+                    var v = ((y / (float)h) - 0.5f) * 2f;
+                    var vignette = 1f - (0.34f * Mathf.Clamp01(((u * u) + (v * v)) * 0.75f));
+
+                    // A little noise for the weave. Fine enough to read as texture
+                    // rather than as dirt.
+                    var grain = 1f + (((float)random.NextDouble() - 0.5f) * 0.075f);
+
+                    var shade = vignette * grain;
+
+                    pixels[(y * w) + x] = new Color32(
+                        (byte)Mathf.Clamp(Felt.r * 255f * shade, 0f, 255f),
+                        (byte)Mathf.Clamp(Felt.g * 255f * shade, 0f, 255f),
+                        (byte)Mathf.Clamp(Felt.b * 255f * shade, 0f, 255f),
+                        255);
+                }
+            }
+
+            texture.SetPixels32(pixels);
+            texture.Apply();
+
+            return _felt = Sprite.Create(texture, new Rect(0f, 0f, w, h), new Vector2(0.5f, 0.5f), 100f);
         }
 
         private static string Key(string kind, int selection) =>
@@ -320,18 +393,13 @@ namespace Roulette.Client
             var chosen = selection;
             button.onClick.AddListener(() => _onBet?.Invoke(captured, chosen));
 
+            // A plain centred square, deliberately with no layout group on it. The
+            // first version used a horizontal group the width of the whole cell, which
+            // is what pushed every pile off its spot and let the figure overflow into
+            // the neighbouring square.
             var stack = NewBox("Chips", cell, new Color(0f, 0f, 0f, 0f));
-            stack.anchorMin = stack.anchorMax = new Vector2(0.5f, 0.5f);
-            stack.pivot = new Vector2(0.5f, 0.5f);
-            stack.sizeDelta = new Vector2(Cell, Cell * 0.6f);
+            stack.sizeDelta = new Vector2(38f, 38f);
             stack.GetComponent<Image>().raycastTarget = false;
-
-            var row = stack.gameObject.AddComponent<HorizontalLayoutGroup>();
-            row.childAlignment = TextAnchor.MiddleCenter;
-            row.childForceExpandWidth = false;
-            row.childForceExpandHeight = false;
-            row.childControlWidth = false;
-            row.childControlHeight = false;
 
             Stacks[Key(kind, selection)] = stack;
         }

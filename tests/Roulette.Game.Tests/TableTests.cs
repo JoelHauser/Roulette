@@ -40,7 +40,7 @@ public class TableTests
     [Fact]
     public void TheCapCountsWhatIsAlreadyOnTheSpot()
     {
-        var rules = new RouletteRules { MaxEvenMoney = 100_000 };
+        var rules = new RouletteRules { MaxBet = 100_000 };
         var table = Table(rules);
         var max = rules.MaxFor(BetKind.Straight);
 
@@ -51,19 +51,52 @@ public class TableTests
     }
 
     /// <summary>
-    /// A straight-up bet risks the house thirty-five times the stake, so its ceiling
-    /// is thirty-five times lower. One flat cap would either strangle the even-money
-    /// bets or leave the house open on the ones that pay.
+    /// Every bet has the same ceiling, because there is no house maximum here -- what
+    /// is left is only the point at which a payout stops fitting in an int. A player
+    /// putting their whole stash on one number is the game, not something to be
+    /// protected from.
     /// </summary>
     [Fact]
-    public void TheCeilingScalesWithWhatTheBetPays()
+    public void EveryBetHasTheSameCeilingBecauseTheHouseDoesNotCap()
     {
         var rules = new RouletteRules();
 
-        Assert.Equal(rules.MaxEvenMoney, rules.MaxFor(BetKind.Red));
-        Assert.Equal(rules.MaxEvenMoney / 35, rules.MaxFor(BetKind.Straight));
-        Assert.True(rules.MaxFor(BetKind.Straight) < rules.MaxFor(BetKind.Corner));
-        Assert.True(rules.MaxFor(BetKind.Corner) < rules.MaxFor(BetKind.Dozen));
+        foreach (var kind in new[]
+                 {
+                     BetKind.Straight, BetKind.Split, BetKind.Corner, BetKind.Dozen, BetKind.Red,
+                 })
+        {
+            Assert.Equal(rules.MaxBet, rules.MaxFor(kind));
+        }
+    }
+
+    /// <summary>
+    /// The ceiling that is left has to keep the biggest possible payout inside an int,
+    /// or a winning straight-up bet comes back negative. Thirty-six times the whole
+    /// cloth is the worst case.
+    /// </summary>
+    [Fact]
+    public void TheCeilingKeepsTheBiggestPayoutInsideAnInt()
+    {
+        var rules = new RouletteRules();
+
+        Assert.True((long)rules.MaxBet * 36 < int.MaxValue);
+        Assert.True((long)rules.MaxTotalStake * 36 < int.MaxValue);
+    }
+
+    /// <summary>
+    /// A million-chip stake on a single number is taken. It was not before: the old
+    /// ceiling scaled down by what a bet paid, which put a straight-up maximum at
+    /// 142,857 and made the largest chip on the tray unplaceable.
+    /// </summary>
+    [Fact]
+    public void TheLargestChipCanGoOnASingleNumber()
+    {
+        var table = Table();
+
+        table.Place(new Bet(BetKind.Straight, 17, 1_000_000));
+
+        Assert.Equal(1_000_000, table.Staked);
     }
 
     [Fact]

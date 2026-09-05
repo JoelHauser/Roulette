@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -271,6 +272,98 @@ namespace Roulette.Client
         /// </summary>
         private static float StackWidth(int chips, float size) =>
             chips <= 0 ? 0f : size + ((chips - 1) * size * 0.58f);
+
+        /// <summary>
+        /// A bet as it sits on the cloth: a small pile with its total printed on it.
+        ///
+        /// <see cref="Build"/> lays chips out in a row with the figure beside them,
+        /// which is right for a pot in the middle of a table and far too wide for a
+        /// betting square -- on a 66-unit cell it overflowed into its neighbours and
+        /// clipped its own label. This is square, centred, and never wider than the
+        /// chip itself.
+        /// </summary>
+        internal static GameObject BuildOnCloth(
+            Transform parent, int amount, TMP_FontAsset font, float size)
+        {
+            var go = new GameObject("Bet", typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+
+            var rect = (RectTransform)go.transform;
+            rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.5f);
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.sizeDelta = new Vector2(size, size);
+
+            var stack = Breakdown(amount, out _);
+
+            // The pile is drawn from the largest denomination in it, and at most three
+            // deep -- past that it is a smudge rather than a stack, and the number on
+            // top is what a player actually reads.
+            var deep = Mathf.Min(3, stack.Sum(entry => entry.Value));
+            var face = stack.Count > 0 ? Sprite(stack[0].Key) : null;
+
+            for (var i = deep - 1; i >= 0; i--)
+            {
+                var chip = new GameObject("Chip", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+                chip.transform.SetParent(rect, false);
+
+                var chipRect = (RectTransform)chip.transform;
+                chipRect.anchorMin = chipRect.anchorMax = new Vector2(0.5f, 0.5f);
+                chipRect.pivot = new Vector2(0.5f, 0.5f);
+                chipRect.sizeDelta = new Vector2(size, size);
+                chipRect.anchoredPosition = new Vector2(0f, i * -1.6f);
+
+                var image = chip.GetComponent<Image>();
+                image.raycastTarget = false;
+
+                if (face != null)
+                {
+                    image.sprite = face;
+                    image.preserveAspect = true;
+                }
+                else
+                {
+                    image.color = new Color(0.75f, 0.68f, 0.45f, 1f);
+                }
+            }
+
+            var label = new GameObject("Total", typeof(RectTransform));
+            label.transform.SetParent(rect, false);
+
+            var text = label.AddComponent<TextMeshProUGUI>();
+            text.text = Short(amount);
+            text.fontSize = size * 0.34f;
+            text.alignment = TextAlignmentOptions.Center;
+            text.color = new Color(0.10f, 0.10f, 0.10f, 1f);
+            text.raycastTarget = false;
+            text.enableWordWrapping = false;
+
+            if (font != null)
+            {
+                text.font = font;
+            }
+
+            var labelRect = (RectTransform)label.transform;
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = Vector2.zero;
+            labelRect.offsetMax = Vector2.zero;
+
+            return go;
+        }
+
+        /// <summary>
+        /// A total short enough to sit on a chip. "250k" fits where "250,000" does not.
+        /// </summary>
+        internal static string Short(int amount)
+        {
+            if (amount >= 1_000_000)
+            {
+                var millions = amount / 1_000_000f;
+                return millions % 1f < 0.05f ? $"{millions:0}M" : $"{millions:0.#}M";
+            }
+
+            return amount >= 1_000 ? $"{amount / 1000}k" : amount.ToString();
+        }
 
         /// <summary>
         /// One chip's face on its own, for the tray a denomination is picked from.

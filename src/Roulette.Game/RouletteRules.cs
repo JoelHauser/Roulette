@@ -26,41 +26,42 @@ public sealed record RouletteRules
     public int MinBet { get; init; } = 10_000;
 
     /// <summary>
-    /// The most that may ride on a single straight-up number.
+    /// The most that may ride on one bet.
     ///
-    /// **This is the house's only protection and it is not optional.** At 35 to 1 a
-    /// single number is the whole bankroll in one bet: without a cap, a player can
-    /// stake everything on 17 and the mod is a coin-flip for the stash rather than a
-    /// game with an edge. Capped per bet rather than per spin, because thirty-six
-    /// straight-up bets at the cap is simply the same money spread out and costs the
-    /// house the same edge.
+    /// **This is not a table limit, it is an arithmetic one.** There is deliberately no
+    /// house maximum here -- a player betting their whole stash on a single number is
+    /// the point of the game, not something to be protected from. What is left is the
+    /// only ceiling that cannot be argued with: a straight-up bet returns thirty-six
+    /// times its stake, and the engine counts chips in an <c>int</c>, so a stake above
+    /// about 59 million would overflow on the way back and pay out a negative number.
+    ///
+    /// Fifty million leaves room under that and is far past any stash the game holds,
+    /// so in practice nothing is capped. Raising it means moving the whole engine to
+    /// <c>long</c> first -- <see cref="MaxTotalStake"/> has the same problem.
     /// </summary>
-    public int MaxStraight { get; init; } = 500_000;
+    public int MaxBet { get; init; } = 50_000_000;
 
     /// <summary>
-    /// The most that may ride on one even-money bet. Higher than the straight cap
-    /// because it pays 1 to 1: the exposure is the stake, not thirty-five times it.
+    /// The most that may be on the cloth in total.
+    ///
+    /// Bounded for the same reason and by the same sum: every bet can return
+    /// thirty-six times its stake, so the whole cloth can return thirty-six times this.
+    /// Above about 59 million that total stops fitting in an int.
     /// </summary>
-    public int MaxEvenMoney { get; init; } = 5_000_000;
-
-    /// <summary>The most that may be on the cloth in total when the wheel turns.</summary>
-    public int MaxTotalStake { get; init; } = 10_000_000;
-
-    /// <summary>How many bets may be on the cloth at once.</summary>
-    public int MaxBets { get; init; } = 20;
+    public int MaxTotalStake { get; init; } = 50_000_000;
 
     /// <summary>
-    /// The ceiling for a given bet, which is the straight cap scaled down by what it
-    /// pays. A bet paying 35 to 1 and one paying 1 to 1 risk the house very
-    /// different amounts for the same stake, so one flat cap would either strangle
-    /// the even-money bets or leave the straight ones wide open.
+    /// How many bets may be on the cloth at once.
+    ///
+    /// A full cloth offers about a hundred and fifty spots and a player may reasonably
+    /// want a lot of them covered, so this is generous. It exists to stop a runaway
+    /// client filling memory, not to limit anyone's game.
     /// </summary>
-    public int MaxFor(BetKind kind)
-    {
-        var odds = Payouts.ToOne(kind);
+    public int MaxBets { get; init; } = 150;
 
-        return odds <= 1
-            ? MaxEvenMoney
-            : Math.Max(MinBet, MaxEvenMoney / odds);
-    }
+    /// <summary>
+    /// The ceiling for a given bet. The same for every kind, because the house is not
+    /// protecting itself here -- see <see cref="MaxBet"/>.
+    /// </summary>
+    public int MaxFor(BetKind kind) => MaxBet;
 }
