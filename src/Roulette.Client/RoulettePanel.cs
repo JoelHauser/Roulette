@@ -24,7 +24,13 @@ namespace Roulette.Client
     {
         private const string RootName = "RouletteTableCanvas";
 
-        private const float WheelSize = 780f;
+        /// <summary>
+        /// The wheel shares the screen with the cloth now, so it is smaller than when
+        /// it had the middle to itself. Wheel on the left, cloth on the right: both are
+        /// things you look at while betting, and stacking them put the cloth off the
+        /// bottom of a 16:9 screen.
+        /// </summary>
+        private const float WheelSize = 560f;
 
         private static readonly Color Gold = new Color(0.72f, 0.62f, 0.34f, 1f);
         private static readonly Color Ink = new Color(0.88f, 0.86f, 0.80f, 1f);
@@ -33,6 +39,9 @@ namespace Roulette.Client
         private static TMP_FontAsset _font;
 
         private static RectTransform _wheelHolder;
+        private static RectTransform _clothHolder;
+        private static RectTransform _chipTray;
+        private static TextMeshProUGUI _balance;
         private static RectTransform _actionRow;
         private static TextMeshProUGUI _status;
         private static TextMeshProUGUI _result;
@@ -46,8 +55,13 @@ namespace Roulette.Client
         private static JObject _lastReply;
         private static string _pocketSignature;
 
-        /// <summary>What one chip is worth. The table minimum, until there is a chip tray.</summary>
+        /// <summary>What the next chip put down is worth. Chosen from the tray.</summary>
         private static int _chip = 10_000;
+
+        /// <summary>The layout the server sent, so the cloth offers only bets it accepts.</summary>
+        private static ClothLayout _layout;
+
+        private static string _layoutSignature;
 
         internal static bool IsOpen => _root != null && _root.activeSelf && !_closing;
 
@@ -191,6 +205,11 @@ namespace Roulette.Client
 
         private static void Place(string kind, int selection)
         {
+            if (WheelView.IsSpinning)
+            {
+                return;
+            }
+
             var reply = RouletteApi.Place(kind, selection, _chip);
 
             if (reply == null)
@@ -286,6 +305,8 @@ namespace Roulette.Client
             _lastReply = reply;
 
             EnsureWheel(table["Pockets"] as JArray);
+            EnsureCloth(table["Layout"] as JObject);
+            ShowBets(table["Bets"] as JArray);
 
             var staked = (int?)table["Staked"] ?? 0;
             var phase = (string)table["Phase"] ?? "Betting";
@@ -312,6 +333,7 @@ namespace Roulette.Client
                 }
             }
 
+            SetBalance(staked);
             BuildActions(Controls(phase, staked));
         }
 
@@ -352,6 +374,114 @@ namespace Roulette.Client
             _pocketSignature = signature;
         }
 
+        /// <summary>
+        /// Builds the cloth once, and again only if the layout changed. Keyed on the
+        /// layout itself rather than on a flag, so anything that would change what the
+        /// cloth offers changes the key.
+        /// </summary>
+        private static void EnsureCloth(JObject layout)
+        {
+            if (layout == null || _clothHolder == null)
+            {
+                return;
+            }
+
+            var splits = layout["Splits"] as JArray;
+            var streets = layout["Streets"] as JArray;
+            var corners = layout["Corners"] as JArray;
+            var sixLines = layout["SixLines"] as JArray;
+
+            var signature = $"{splits?.Count}/{streets?.Count}/{corners?.Count}/{sixLines?.Count}";
+
+            if (signature == _layoutSignature)
+            {
+                return;
+            }
+
+            for (var i = _clothHolder.childCount - 1; i >= 0; i--)
+            {
+                UnityEngine.Object.Destroy(_clothHolder.GetChild(i).gameObject);
+            }
+
+            _layout = new ClothLayout(
+                splits == null
+                    ? new List<(int, int)>()
+                    : splits.Select(x => ((int?)x["Low"] ?? 0, (int?)x["High"] ?? 0)).ToList(),
+                streets?.Select(x => (int)x).ToList() ?? new List<int>(),
+                corners?.Select(x => (int)x).ToList() ?? new List<int>(),
+                sixLines?.Select(x => (int)x).ToList() ?? new List<int>());
+
+            ClothView.Build(_clothHolder, _layout, _font, Place);
+            _layoutSignature = signature;
+        }
+
+        private static void ShowBets(JArray bets)
+        {
+            if (_layoutSignature == null)
+            {
+                return;
+            }
+
+            ClothView.ShowBets(
+                bets?.Select(b => (
+                    (string)b["Kind"] ?? string.Empty,
+                    (int?)b["Selection"] ?? 0,
+                    (int?)b["Amount"] ?? 0)));
+        }
+
+        private static void SetBalance(int staked)
+        {
+            if (_balance != null)
+            {
+                _balance.text = staked > 0
+                    ? $"CHIP  {_chip:N0}          ON THE CLOTH  {staked:N0}"
+                    : $"CHIP  {_chip:N0}";
+            }
+        }
+
+        /// <summary>
+        /// The tray. Picking a chip decides what the next one put on the cloth is
+        /// worth, which is how a real table works -- you choose a denomination and then
+        /// place it, rather than typing an amount.
+        /// </summary>
+        private static void BuildChipTray()
+        {
+            if (_chipTray == null)
+            {
+                return;
+            }
+
+            for (var i = _chipTray.childCount - 1; i >= 0; i--)
+            {
+                UnityEngine.Object.Destroy(_chipTray.GetChild(i).gameObject);
+            }
+
+            foreach (var chip in ChipView.Denominations)
+            {
+                var value = chip.Value;
+
+                var box = NewBox("Chip_" + chip.File, _chipTray, Color.white);
+                box.sizeDelta = new Vector2(58f, 58f);
+
+                var image = box.GetComponent<Image>();
+                image.sprite = ChipView.Face(chip);
+                image.preserveAspect = true;
+
+                // The chosen one is full strength and the rest are dimmed, which reads
+                // faster than a border and cannot be missed at a glance.
+                image.color = value == _chip ? Color.white : new Color(1f, 1f, 1f, 0.42f);
+
+                box.gameObject.AddComponent<Button>().onClick.AddListener(() =>
+                {
+                    _chip = value;
+                    BuildChipTray();
+                    SetBalance(Staked());
+                });
+            }
+        }
+
+        private static int Staked() => (int?)_lastReply?["Table"]?["Staked"] ?? 0;
+
         private static List<KeyValuePair<string, Action>> Lobby() =>
             [Action("OPEN A TABLE", () => Render(RouletteApi.State())), Action("CLOSE", Close)];
 
@@ -360,6 +490,11 @@ namespace Roulette.Client
         /// work -- but enough to put money on several different rules at once and see
         /// them settle.
         /// </summary>
+        /// <summary>
+        /// What is left once the cloth carries the betting: the table's own verbs.
+        /// Seven buttons standing in for a layout is what made this unreadable -- there
+        /// was no way to bet a number other than 17, and nothing showed what was down.
+        /// </summary>
         private static List<KeyValuePair<string, Action>> Controls(string phase, int staked)
         {
             if (string.Equals(phase, "Settled", StringComparison.OrdinalIgnoreCase))
@@ -367,21 +502,12 @@ namespace Roulette.Client
                 return [Action("NEXT SPIN", Spin), Action("CLOSE", Close)];
             }
 
-            var controls = new List<KeyValuePair<string, Action>>
-            {
-                Action("RED", () => Place("Red", 0)),
-                Action("BLACK", () => Place("Black", 0)),
-                Action("ODD", () => Place("Odd", 0)),
-                Action("EVEN", () => Place("Even", 0)),
-                Action("1-18", () => Place("Low", 0)),
-                Action("19-36", () => Place("High", 0)),
-                Action("17", () => Place("Straight", 17)),
-            };
+            var controls = new List<KeyValuePair<string, Action>>();
 
             if (staked > 0)
             {
-                controls.Add(Action("CLEAR", Clear));
                 controls.Add(Action("SPIN", Spin));
+                controls.Add(Action("CLEAR", Clear));
             }
 
             controls.Add(Action("CLOSE", Close));
@@ -427,26 +553,65 @@ namespace Roulette.Client
             title.rectTransform.anchoredPosition = new Vector2(0f, -18f);
             title.color = Gold;
 
+            // Wheel left, cloth right. Both are looked at while betting, and stacking
+            // them ran the cloth off the bottom of a 16:9 screen. The pair is centred as
+            // a whole, so an ultrawide simply gets more dark either side.
+            var wheelX = -((ClothView.Width + WheelSize) * 0.25f) - 30f;
+            var clothX = wheelX + (WheelSize * 0.5f) + (ClothView.Width * 0.5f) + 60f;
+
             _wheelHolder = NewBox("Wheel", canvasObject.transform, Color.clear);
             _wheelHolder.anchorMin = _wheelHolder.anchorMax = new Vector2(0.5f, 0.5f);
             _wheelHolder.pivot = new Vector2(0.5f, 0.5f);
             _wheelHolder.sizeDelta = new Vector2(WheelSize, WheelSize);
-            _wheelHolder.anchoredPosition = new Vector2(0f, 66f);
+            _wheelHolder.anchoredPosition = new Vector2(wheelX, 70f);
 
-            _result = NewText("Result", canvasObject.transform, string.Empty, 44f, TextAlignmentOptions.Center);
-            _result.rectTransform.anchorMin = new Vector2(0.5f, 0f);
-            _result.rectTransform.anchorMax = new Vector2(0.5f, 0f);
-            _result.rectTransform.pivot = new Vector2(0.5f, 0f);
-            _result.rectTransform.sizeDelta = new Vector2(900f, 56f);
-            _result.rectTransform.anchoredPosition = new Vector2(0f, 168f);
+            _clothHolder = NewBox("ClothHolder", canvasObject.transform, Color.clear);
+            _clothHolder.anchorMin = _clothHolder.anchorMax = new Vector2(0.5f, 0.5f);
+            _clothHolder.pivot = new Vector2(0.5f, 0.5f);
+            _clothHolder.sizeDelta = new Vector2(ClothView.Width, ClothView.Height);
+            _clothHolder.anchoredPosition = new Vector2(clothX, 70f);
+
+            // The result goes under the wheel, where the eye already is when the ball
+            // stops, rather than in the middle of the screen away from both halves.
+            _result = NewText("Result", canvasObject.transform, string.Empty, 58f, TextAlignmentOptions.Center);
+            _result.rectTransform.anchorMin = _result.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+            _result.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            _result.rectTransform.sizeDelta = new Vector2(WheelSize, 72f);
+            _result.rectTransform.anchoredPosition = new Vector2(wheelX, 70f - (WheelSize * 0.5f) - 52f);
             _result.color = Gold;
+
+            _balance = NewText("Balance", canvasObject.transform, string.Empty, 20f, TextAlignmentOptions.Center);
+            _balance.rectTransform.anchorMin = _balance.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+            _balance.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            _balance.rectTransform.sizeDelta = new Vector2(ClothView.Width, 28f);
+            _balance.rectTransform.anchoredPosition =
+                new Vector2(clothX, 70f + (ClothView.Height * 0.5f) + 26f);
+            _balance.color = Gold;
+
+            // The tray under the cloth: a chip is picked, then put down, the way a real
+            // table works rather than by typing an amount.
+            _chipTray = NewBox("ChipTray", canvasObject.transform, Color.clear);
+            _chipTray.anchorMin = _chipTray.anchorMax = new Vector2(0.5f, 0.5f);
+            _chipTray.pivot = new Vector2(0.5f, 0.5f);
+            _chipTray.sizeDelta = new Vector2(ClothView.Width, 62f);
+            _chipTray.anchoredPosition = new Vector2(clothX, 70f - (ClothView.Height * 0.5f) - 48f);
+
+            var tray = _chipTray.gameObject.AddComponent<HorizontalLayoutGroup>();
+            tray.spacing = 12f;
+            tray.childAlignment = TextAnchor.MiddleCenter;
+            tray.childForceExpandWidth = false;
+            tray.childForceExpandHeight = false;
+            tray.childControlWidth = false;
+            tray.childControlHeight = false;
+
+            BuildChipTray();
 
             _status = NewText("Status", canvasObject.transform, string.Empty, 19f, TextAlignmentOptions.Center);
             _status.rectTransform.anchorMin = new Vector2(0.5f, 0f);
             _status.rectTransform.anchorMax = new Vector2(0.5f, 0f);
             _status.rectTransform.pivot = new Vector2(0.5f, 0f);
             _status.rectTransform.sizeDelta = new Vector2(1400f, 30f);
-            _status.rectTransform.anchoredPosition = new Vector2(0f, 124f);
+            _status.rectTransform.anchoredPosition = new Vector2(0f, 108f);
 
             _actionRow = NewBox("Actions", canvasObject.transform, Color.clear);
             _actionRow.anchorMin = new Vector2(0.5f, 0f);

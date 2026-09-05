@@ -131,20 +131,23 @@
     cannot touch a running game.
   -->
   <!--
-    The art sits beside the DLL rather than being embedded: the wheel bowl and the
-    ball load from disk next to Instance.Info.Location, and a missing file falls back
-    to something drawn rather than failing.
+    The art sits beside the DLL rather than being embedded: the ball and the chip faces
+    load from disk next to Instance.Info.Location, and a missing file falls back to
+    something drawn rather than failing.
+
+    There is no wheel image. It was a photograph once, with the wrong number of
+    pockets; the wheel is drawn from the server's own pocket list now.
   -->
   <ItemGroup>
-    <WheelArt Include="assets\wheel.png" />
     <BallArt Include="assets\ball.png" />
+    <ChipArt Include="assets\chips\*.png" />
   </ItemGroup>
 
   <Target Name="DeployToSPT" AfterTargets="Build" Condition="'$(DeployToSPT)' == 'true'">
-    <MakeDir Directories="$(SPTPath)\BepInEx\plugins\Roulette" />
+    <MakeDir Directories="$(SPTPath)\BepInEx\plugins\Roulette\chips" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(SPTPath)\BepInEx\plugins\Roulette" />
-    <Copy SourceFiles="@(WheelArt)" DestinationFolder="$(SPTPath)\BepInEx\plugins\Roulette" />
     <Copy SourceFiles="@(BallArt)" DestinationFolder="$(SPTPath)\BepInEx\plugins\Roulette" />
+    <Copy SourceFiles="@(ChipArt)" DestinationFolder="$(SPTPath)\BepInEx\plugins\Roulette\chips" />
     <Message Importance="high" Text="Deployed $(TargetFileName) + art to $(SPTPath)\BepInEx\plugins\Roulette" />
   </Target>
 

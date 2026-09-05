@@ -89,12 +89,12 @@ elseif ($InstallPath) {
     if ($LASTEXITCODE -ne 0) { throw "the client plugin failed to build with $LASTEXITCODE" }
 
     $pluginFolder = Join-Path $stage 'BepInEx/plugins/Roulette'
-    New-Item -ItemType Directory -Force -Path (Join-Path $pluginFolder 'cards') | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $pluginFolder 'chips') | Out-Null
 
+    # Roulette ships a ball and the chip faces. The wheel itself is drawn rather than
+    # shipped -- see WheelView.
     Copy-Item (Join-Path $clientOut 'Roulette.Client.dll') -Destination $pluginFolder
-    Copy-Item (Join-Path $root 'src/Roulette.Client/assets/table.png') -Destination $pluginFolder
-    Copy-Item (Join-Path $root 'src/Roulette.Client/assets/cards/*.png') -Destination (Join-Path $pluginFolder 'cards')
+    Copy-Item (Join-Path $root 'src/Roulette.Client/assets/ball.png') -Destination $pluginFolder
     Copy-Item (Join-Path $root 'src/Roulette.Client/assets/chips/*.png') -Destination (Join-Path $pluginFolder 'chips')
 
     $clientIncluded = $true

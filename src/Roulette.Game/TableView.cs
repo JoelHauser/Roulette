@@ -14,6 +14,32 @@ public sealed record PocketView(int Number, string Label, string Colour);
 /// <summary>One bet on the cloth.</summary>
 public sealed record BetView(string Kind, int Selection, int Amount, string Description);
 
+/// <summary>One split, and the two numbers it covers.</summary>
+public sealed record SplitView(int Low, int High);
+
+/// <summary>
+/// Every spot a chip may go on, so the client can draw a cloth that offers exactly the
+/// bets the server accepts.
+///
+/// **Sent rather than duplicated**, for the same reason the pockets are. A second copy
+/// of this list in the client is a second thing to keep in step, and when it drifts the
+/// cloth offers a bet the server refuses -- or worse, one it accepts as a different bet.
+/// Splits especially: a split is placed by its **index in this list**, so a client
+/// enumerating its own would be sending indices into a list nobody else has.
+/// </summary>
+public sealed record LayoutView(
+    IReadOnlyList<SplitView> Splits,
+    IReadOnlyList<int> Streets,
+    IReadOnlyList<int> Corners,
+    IReadOnlyList<int> SixLines)
+{
+    public static LayoutView Of() => new(
+        [.. Layout.Splits.Select(s => new SplitView(s.Low, s.High))],
+        Layout.Streets,
+        Layout.Corners,
+        Layout.SixLines);
+}
+
 /// <summary>What one bet did on the spin that just settled.</summary>
 public sealed record OutcomeView(string Description, int Amount, bool Won, int Returned);
 
@@ -48,6 +74,7 @@ public sealed record TableView(
     string Phase,
     string Wheel,
     IReadOnlyList<PocketView> Pockets,
+    LayoutView Layout,
     IReadOnlyList<BetView> Bets,
     int Staked,
     int MinBet,
@@ -58,6 +85,7 @@ public sealed record TableView(
         table.Phase.ToString(),
         table.Wheel.Kind.ToString(),
         [.. table.Wheel.Pockets.Select(p => new PocketView(p.Number, p.Label, p.Colour.ToString()))],
+        LayoutView.Of(),
         [.. table.Bets.Select(Describe)],
         table.Staked,
         table.Rules.MinBet,
